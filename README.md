@@ -12,9 +12,10 @@ A simple, production-ready template for building Model Context Protocol (MCP) se
 
 - ✅ FastMCP-based server with HTTP streaming support
 - ✅ FastAPI integration for additional REST endpoints
-- ✅ Example tools: health check and user information
+- ✅ Example tools: health check, user information, arithmetic operations, and Databricks job triggering
 - ✅ Production-ready project structure
 - ✅ Ready for Databricks Apps deployment
+- ✅ Comprehensive testing with integration tests
 
 ## Project Structure
 
@@ -92,6 +93,8 @@ The server will start on `http://localhost:8000` by default (or your specified p
 - **Available Tools**: 
   - `health`: Check server status
   - `get_current_user`: Get authenticated user information
+  - `add_numbers`: Add two numbers together (example of parameterized tool)
+  - `trigger_job_run`: Trigger a Databricks job run by job ID
 
 ## Testing the MCP Server
 
@@ -109,7 +112,9 @@ uv run pytest tests/ -v -s
 **What the tests do:**
 - Automatically start the MCP server
 - Test that `list_tools()` works correctly
-- Test that all registered tools can be called without errors by invoking the `call_tools()`
+- Test parameter-free tools (`health`, `get_current_user`)
+- Test parameterized tools (`add_numbers` with various inputs)
+- Test error handling (`trigger_job_run` with invalid job ID)
 - Automatically clean up the server after tests complete
 
 ### Manual Testing
@@ -151,9 +156,10 @@ The script will guide you through:
 - Retrieves app configuration using `databricks apps get`
 - Extracts user authorization scopes from `effective_user_api_scopes`
 - Gets workspace host from your Databricks profile
+- Optionally accepts a job ID to test `trigger_job_run` tool
 - Generates OAuth token with the correct scopes
 - Tests MCP client with user-level authentication
-- Verifies both the `health` check and `get_current_user` tool work correctly
+- Verifies all tools work correctly: `health`, `get_current_user`, `add_numbers`, and optionally `trigger_job_run`
 
 This test simulates the real end-user experience when they authorize your app and use it with their credentials.
 
@@ -177,18 +183,25 @@ To add a new tool to your MCP server:
 
 ```python
 @mcp_server.tool
-def calculate_sum(a: int, b: int) -> dict:
+def add_numbers(a: float, b: float) -> dict:
     """
-    Calculate the sum of two numbers.
+    Add two numbers together.
+    
+    This tool performs basic arithmetic addition of two numeric values.
     
     Args:
-        a: First number
-        b: Second number
+        a (float): The first number to add
+        b (float): The second number to add
     
     Returns:
-        dict: Contains the sum result
+        dict: A dictionary containing the result and input values
     """
-    return {"result": a + b}
+    result = a + b
+    return {
+        "result": result,
+        "a": a,
+        "b": b,
+    }
 ```
 
 3. Restart the server - the new tool will be automatically available to clients
@@ -213,16 +226,48 @@ The `utils.py` module provides two helper methods for interacting with Databrick
 - Both methods return a client authenticated as the current developer, since no service principal identity exists in the local environment.
 
 **Example usage in tools:**
+
 ```python
 from server import utils
 
-# Get current user information (user-authenticated)
-w = utils.get_user_authenticated_workspace_client()
-user = w.current_user.me()
-display_name = user.display_name
+# Example 1: Get current user information (user-authenticated)
+@mcp_server.tool
+def get_current_user() -> dict:
+    """Get current user information."""
+    try:
+        w = utils.get_user_authenticated_workspace_client()
+        user = w.current_user.me()
+        return {
+            "display_name": user.display_name,
+            "user_name": user.user_name,
+            "active": user.active,
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+# Example 2: Trigger a Databricks job (app-authenticated)
+@mcp_server.tool
+def trigger_job_run(job_id: int) -> dict:
+    """Trigger a Databricks job run."""
+    try:
+        w = utils.get_workspace_client()
+        run = w.jobs.run_now(job_id=job_id)
+        
+        # Construct the run page URL
+        workspace_host = w.config.host.rstrip("/")
+        run_page_url = f"{workspace_host}/jobs/{job_id}/runs/{run.run_id}"
+        
+        return {
+            "success": True,
+            "run_id": run.run_id,
+            "job_id": job_id,
+            "run_page_url": run_page_url,
+        }
+    except Exception as e:
+        return {"success": False, "job_id": job_id, "error": str(e)}
 ```
 
-See the `get_current_user` tool in `server/tools.py` for a complete example.
+See the `get_current_user` and `trigger_job_run` tools in `server/tools.py` for complete implementations.
 
 ## Generating OAuth Tokens
 
